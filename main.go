@@ -64,7 +64,9 @@ func (d *DraggableCard) DragEnd() {
 func (d *DraggableCard) MouseDown(ev *desktop.MouseEvent) {
 	d.isDragging = true
 	d.dragStartPos = ev.Position
-	d.parent.Refresh()
+	if d.parent != nil {
+		d.parent.Refresh()
+	}
 }
 
 func (d *DraggableCard) MouseUp(*desktop.MouseEvent) {

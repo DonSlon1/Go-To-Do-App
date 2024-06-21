@@ -2,130 +2,95 @@ package main
 
 import (
 	"fmt"
-	"image/color"
-	"strconv"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
+	"image/color"
 )
 
-type customButton struct {
-	widget.Button
-	bgColor color.Color
+type DraggableCard struct {
+	widget.Card
+	isDragging bool
+	dragStart  fyne.Position
+	dragOffset fyne.Position
+	onDragEnd  func(*DraggableCard)
 }
 
-func newCustomButton(label string, tapped func()) *customButton {
-	button := &customButton{}
-	button.ExtendBaseWidget(button)
-	button.Text = label
-	button.OnTapped = tapped
-	button.bgColor = color.NRGBA{R: 0x80, G: 0, B: 0, A: 0xff}
-	return button
+func NewDraggableCard(title, subtitle string, content fyne.CanvasObject, onDragEnd func(*DraggableCard)) *DraggableCard {
+	card := &DraggableCard{onDragEnd: onDragEnd}
+	card.ExtendBaseWidget(card)
+	card.SetTitle(title)
+	card.SetSubTitle(subtitle)
+	card.SetContent(content)
+	return card
 }
 
-func (b *customButton) CreateRenderer() fyne.WidgetRenderer {
-	b.ExtendBaseWidget(b)
-	bg := canvas.NewRectangle(b.bgColor)
-	text := canvas.NewText(b.Text, color.White)
-	text.Alignment = fyne.TextAlignCenter
-	objects := []fyne.CanvasObject{bg, text}
-
-	return &customButtonRenderer{
-		button:  b,
-		bg:      bg,
-		text:    text,
-		objects: objects,
+func (d *DraggableCard) Dragged(ev *fyne.DragEvent) {
+	if d.isDragging {
+		d.Move(ev.Position.Subtract(d.dragOffset))
 	}
 }
 
-type customButtonRenderer struct {
-	button  *customButton
-	bg      *canvas.Rectangle
-	text    *canvas.Text
-	objects []fyne.CanvasObject
+func (d *DraggableCard) DragEnd() {
+	if d.isDragging {
+		d.isDragging = false
+		if d.onDragEnd != nil {
+			d.onDragEnd(d)
+		}
+	}
 }
 
-func (r *customButtonRenderer) Destroy() {}
-
-func (r *customButtonRenderer) Layout(size fyne.Size) {
-	r.bg.Resize(size)
-	r.text.Resize(size)
+func (d *DraggableCard) MouseDown(ev *desktop.MouseEvent) {
+	d.isDragging = true
+	d.dragStart = ev.Position
+	d.dragOffset = ev.Position.Subtract(d.Position())
 }
 
-func (r *customButtonRenderer) MinSize() fyne.Size {
-	return r.text.MinSize().Add(fyne.NewSize(20, 20))
-}
-
-func (r *customButtonRenderer) Refresh() {
-	r.bg.FillColor = r.button.bgColor
-	r.text.Text = r.button.Text
-	r.bg.Refresh()
-	r.text.Refresh()
-}
-
-func (r *customButtonRenderer) Objects() []fyne.CanvasObject {
-	return r.objects
+func (d *DraggableCard) MouseUp(*desktop.MouseEvent) {
+	d.DragEnd()
 }
 
 func main() {
 	myApp := app.New()
-	myWindow := myApp.NewWindow("Input and Custom Widget Example")
+	myWindow := myApp.NewWindow("Movable Sticky Notes")
 
-	// Text input
-	textEntry := widget.NewEntry()
-	textEntry.SetPlaceHolder("Enter text here")
+	columns := make([]*fyne.Container, 3)
+	for i := 0; i < 3; i++ {
+		columns[i] = container.NewVBox()
+	}
 
-	// Number input
-	numberEntry := widget.NewEntry()
-	numberEntry.SetPlaceHolder("Enter a number")
+	content := container.NewHBox(columns[0], columns[1], columns[2])
 
-	// Password input
-	passwordEntry := widget.NewPasswordEntry()
-	passwordEntry.SetPlaceHolder("Enter password")
-
-	// Dropdown
-	dropdown := widget.NewSelect([]string{"Option 1", "Option 2", "Option 3"}, func(value string) {
-		fmt.Println("Selected:", value)
-	})
-
-	// Custom button
-	customBtn := newCustomButton("Submit", func() {
-		// Get text input
-		text := textEntry.Text
-		fmt.Println("Text input:", text)
-
-		// Get and validate number input
-		numText := numberEntry.Text
-		if num, err := strconv.Atoi(numText); err == nil {
-			fmt.Println("Number input:", num)
-		} else {
-			fmt.Println("Invalid number input")
+	onDragEnd := func(card *DraggableCard) {
+		cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, card.Size().Height/2))
+		for _, col := range columns {
+			colPos := col.Position()
+			if cardCenter.X >= colPos.X && cardCenter.X < colPos.X+col.Size().Width {
+				// Remove card from its current column
+				for _, c := range columns {
+					c.Remove(card)
+				}
+				// Add card to the new column
+				col.Add(card)
+				break
+			}
 		}
+		content.Refresh()
+	}
 
-		// Get password input
-		password := passwordEntry.Text
-		fmt.Println("Password input:", password)
+	for i := 1; i <= 5; i++ {
+		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", widget.NewLabel("Content"), onDragEnd)
+		columns[i%3].Add(card)
+	}
 
-		// Get dropdown selection
-		fmt.Println("Dropdown selection:", dropdown.Selected)
-	})
+	// Add a canvas under the content to catch mouse events
+	canvasObj := canvas.NewRectangle(color.RGBA{R: 173, G: 219, B: 156, A: 200})
+	canvasContainer := container.NewMax(canvasObj, content)
 
-	content := container.NewVBox(
-		widget.NewLabel("Text Input:"),
-		textEntry,
-		widget.NewLabel("Number Input:"),
-		numberEntry,
-		widget.NewLabel("Password Input:"),
-		passwordEntry,
-		widget.NewLabel("Dropdown:"),
-		dropdown,
-		customBtn,
-	)
-
-	myWindow.SetContent(content)
-	myWindow.Resize(fyne.NewSize(300, 400))
+	myWindow.SetContent(canvasContainer)
+	myWindow.Resize(fyne.NewSize(600, 400))
 	myWindow.ShowAndRun()
 }

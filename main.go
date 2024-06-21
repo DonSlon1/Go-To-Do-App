@@ -2,21 +2,25 @@ package main
 
 import (
 	"fmt"
+	"image/color"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"image/color"
 )
 
 type DraggableCard struct {
 	widget.Card
-	isDragging bool
-	dragStart  fyne.Position
-	dragOffset fyne.Position
-	onDragEnd  func(*DraggableCard)
+	isDragging   bool
+	dragStartPos fyne.Position
+	dragEndPos   fyne.Position
+	onDragEnd    func(*DraggableCard)
+	parent       fyne.CanvasObject
 }
 
 func NewDraggableCard(title, subtitle string, content fyne.CanvasObject, onDragEnd func(*DraggableCard)) *DraggableCard {
@@ -30,7 +34,10 @@ func NewDraggableCard(title, subtitle string, content fyne.CanvasObject, onDragE
 
 func (d *DraggableCard) Dragged(ev *fyne.DragEvent) {
 	if d.isDragging {
-		d.Move(ev.Position.Subtract(d.dragOffset))
+		deltaX := ev.Position.X - d.dragStartPos.X
+		deltaY := ev.Position.Y - d.dragStartPos.Y
+		d.Move(fyne.NewPos(d.Position().X+deltaX, d.Position().Y+deltaY))
+		d.dragStartPos = ev.Position
 	}
 }
 
@@ -45,28 +52,49 @@ func (d *DraggableCard) DragEnd() {
 
 func (d *DraggableCard) MouseDown(ev *desktop.MouseEvent) {
 	d.isDragging = true
-	d.dragStart = ev.Position
-	d.dragOffset = ev.Position.Subtract(d.Position())
+	d.dragStartPos = ev.Position
+	d.parent.Refresh()
 }
 
 func (d *DraggableCard) MouseUp(*desktop.MouseEvent) {
 	d.DragEnd()
 }
 
+func createColumnWithBorderAndHeader(content *fyne.Container, title string) *fyne.Container {
+	border := canvas.NewRectangle(color.Gray{Y: 200})
+	border.StrokeWidth = 2
+
+	header := widget.NewLabelWithStyle(title, fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	headerBg := canvas.NewRectangle(theme.PrimaryColor())
+	headerContainer := container.NewStack(headerBg, header)
+
+	return container.New(layout.NewBorderLayout(headerContainer, nil, nil, nil),
+		border,
+		headerContainer,
+		container.NewPadded(content),
+	)
+}
+
 func main() {
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Movable Sticky Notes")
 
+	columnTitles := []string{"To Do", "In Progress", "Done"}
 	columns := make([]*fyne.Container, 3)
+	borderedColumns := make([]*fyne.Container, 3)
+
+	content := container.New(layout.NewGridLayout(3))
+
 	for i := 0; i < 3; i++ {
 		columns[i] = container.NewVBox()
+		borderedColumns[i] = createColumnWithBorderAndHeader(columns[i], columnTitles[i])
+		borderedColumns[i].Resize(fyne.NewSize(200, 0)) // Set a fixed width for each column
+		content.Add(borderedColumns[i])
 	}
 
-	content := container.NewHBox(columns[0], columns[1], columns[2])
-
 	onDragEnd := func(card *DraggableCard) {
-		cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, card.Size().Height/2))
-		for _, col := range columns {
+		cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, 0))
+		for i, col := range borderedColumns {
 			colPos := col.Position()
 			if cardCenter.X >= colPos.X && cardCenter.X < colPos.X+col.Size().Width {
 				// Remove card from its current column
@@ -74,7 +102,8 @@ func main() {
 					c.Remove(card)
 				}
 				// Add card to the new column
-				col.Add(card)
+				columns[i].Add(card)
+				card.Move(fyne.NewPos(0, 0)) // Reset position within new column
 				break
 			}
 		}
@@ -83,14 +112,11 @@ func main() {
 
 	for i := 1; i <= 5; i++ {
 		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", widget.NewLabel("Content"), onDragEnd)
+		card.parent = content
 		columns[i%3].Add(card)
 	}
 
-	// Add a canvas under the content to catch mouse events
-	canvasObj := canvas.NewRectangle(color.RGBA{R: 173, G: 219, B: 156, A: 200})
-	canvasContainer := container.NewMax(canvasObj, content)
-
-	myWindow.SetContent(canvasContainer)
-	myWindow.Resize(fyne.NewSize(600, 400))
+	myWindow.SetContent(content)
+	myWindow.Resize(fyne.NewSize(900, 600))
 	myWindow.ShowAndRun()
 }

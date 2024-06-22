@@ -40,12 +40,13 @@ type DraggableCard struct {
 func showDeleteCardModal(card *DraggableCard) {
 	window := fyne.CurrentApp().Driver().AllWindows()[0]
 	deleteDialog := dialog.NewConfirm("Delete Card", "Are you sure you want to delete this card?", func(confirmed bool) {
-		if confirmed {
-			for _, c := range columns {
-				c.Remove(card)
-			}
-			content.Refresh()
+		if !confirmed {
+			return
 		}
+		for _, c := range columns {
+			c.Remove(card)
+		}
+		content.Refresh()
 	}, window)
 	deleteDialog.Show()
 }
@@ -59,12 +60,14 @@ func NewDraggableCard(title, subtitle, content string, onDragEnd func(*Draggable
 	card.contentLabel = widget.NewLabel(content)
 	card.contentLabel.Wrapping = fyne.TextWrapWord
 
-	card.editButton = widget.NewButton("Edit", func() {
+	card.editButton = widget.NewButtonWithIcon("Edit", resourceEditPenSvgrepoComSvg, func() {
 		showEditCardModal(card)
 	})
-	card.deleteButton = widget.NewButton("Delete", func() {
+	card.deleteButton = widget.NewButtonWithIcon("Delete", resourceTrashIconSvg, func() {
 		showDeleteCardModal(card)
 	})
+	card.editButton.Importance = widget.HighImportance
+	card.deleteButton.Importance = widget.DangerImportance
 
 	// Use a grid layout with 2 columns to make buttons span full width
 	buttons := container.New(layout.NewGridLayout(2),
@@ -112,11 +115,21 @@ func showEditCardModal(card *DraggableCard) {
 	}
 
 	statusEntry := widget.NewSelect([]string{NotStarted.String(), InProgress.String(), Done.String()}, nil)
+	foundCard := false
 	for i, col := range columns {
-		if col.Objects[len(col.Objects)-1] == card {
-			statusEntry.SetSelectedIndex(i)
+		for _, obj := range col.Objects {
+			if obj == card {
+				statusEntry.SetSelectedIndex(i)
+				foundCard = true
+				break
+			}
+		}
+		if foundCard {
 			break
 		}
+	}
+	if !foundCard {
+		statusEntry.SetSelectedIndex(0)
 	}
 
 	items := []*widget.FormItem{
@@ -129,7 +142,6 @@ func showEditCardModal(card *DraggableCard) {
 		if !create {
 			return
 		}
-		// In the submit function of showNewCardModal
 		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
 		column := columns[statusEntry.SelectedIndex()]
 		column.Add(newCard)

@@ -32,15 +32,113 @@ type DraggableCard struct {
 	dragEndPos   fyne.Position
 	onDragEnd    func(*DraggableCard)
 	parent       fyne.CanvasObject
+	contentLabel *widget.Label
+	editButton   *widget.Button
+	deleteButton *widget.Button
 }
 
-func NewDraggableCard(title, subtitle string, content fyne.CanvasObject, onDragEnd func(*DraggableCard)) *DraggableCard {
-	card := &DraggableCard{onDragEnd: onDragEnd}
+func showDeleteCardModal(card *DraggableCard) {
+	window := fyne.CurrentApp().Driver().AllWindows()[0]
+	deleteDialog := dialog.NewConfirm("Delete Card", "Are you sure you want to delete this card?", func(confirmed bool) {
+		if confirmed {
+			for _, c := range columns {
+				c.Remove(card)
+			}
+			content.Refresh()
+		}
+	}, window)
+	deleteDialog.Show()
+}
+
+func NewDraggableCard(title, subtitle, content string, onDragEnd func(*DraggableCard), parent fyne.CanvasObject) *DraggableCard {
+	card := &DraggableCard{onDragEnd: onDragEnd, parent: parent}
 	card.ExtendBaseWidget(card)
 	card.SetTitle(title)
 	card.SetSubTitle(subtitle)
-	card.SetContent(content)
+
+	card.contentLabel = widget.NewLabel(content)
+	card.contentLabel.Wrapping = fyne.TextWrapWord
+
+	card.editButton = widget.NewButton("Edit", func() {
+		showEditCardModal(card)
+	})
+	card.deleteButton = widget.NewButton("Delete", func() {
+		showDeleteCardModal(card)
+	})
+
+	// Use a grid layout with 2 columns to make buttons span full width
+	buttons := container.New(layout.NewGridLayout(2),
+		card.editButton,
+		card.deleteButton,
+	)
+
+	cardContent := container.NewVBox(
+		card.contentLabel,
+		buttons,
+	)
+	card.SetContent(cardContent)
+
 	return card
+}
+
+func showEditCardModal(card *DraggableCard) {
+	window := fyne.CurrentApp().Driver().AllWindows()[0]
+
+	titleEntry := widget.NewEntry()
+	titleEntry.SetText(card.Title)
+	titleEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("title cannot be empty")
+		}
+		return nil
+	}
+
+	subtitleEntry := widget.NewEntry()
+	subtitleEntry.SetText(card.Subtitle)
+	subtitleEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("subtitle cannot be empty")
+		}
+		return nil
+	}
+
+	contentEntry := widget.NewMultiLineEntry()
+	contentEntry.SetText(card.contentLabel.Text)
+	contentEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("content cannot be empty")
+		}
+		return nil
+	}
+
+	statusEntry := widget.NewSelect([]string{NotStarted.String(), InProgress.String(), Done.String()}, nil)
+	for i, col := range columns {
+		if col.Objects[len(col.Objects)-1] == card {
+			statusEntry.SetSelectedIndex(i)
+			break
+		}
+	}
+
+	items := []*widget.FormItem{
+		{Text: "Title", Widget: titleEntry},
+		{Text: "Subtitle", Widget: subtitleEntry},
+		{Text: "Content", Widget: contentEntry},
+		{Text: "Status", Widget: statusEntry},
+	}
+	submit := func(create bool) {
+		if !create {
+			return
+		}
+		// In the submit function of showNewCardModal
+		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
+		column := columns[statusEntry.SelectedIndex()]
+		column.Add(newCard)
+		window.Canvas().Refresh(column)
+	}
+
+	form := dialog.NewForm("New Card", "Create", "Cancel", items, submit, window)
+	form.Resize(fyne.NewSize(400, 400))
+	form.Show()
 }
 
 func (d *DraggableCard) Dragged(ev *fyne.DragEvent) {
@@ -82,10 +180,13 @@ func createColumnWithBorderAndHeader(content *fyne.Container, title string) *fyn
 	headerBg := canvas.NewRectangle(theme.PrimaryColor())
 	headerContainer := container.NewStack(headerBg, header)
 
+	scrollContainer := container.NewVScroll(content)
+	scrollContainer.SetMinSize(fyne.NewSize(200, 0))
+
 	return container.New(layout.NewBorderLayout(headerContainer, nil, nil, nil),
 		border,
 		headerContainer,
-		container.NewPadded(content),
+		scrollContainer,
 	)
 }
 
@@ -131,8 +232,7 @@ func main() {
 	}
 
 	for i := 1; i <= 5; i++ {
-		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", widget.NewLabel("Content"), onDragEnd)
-		card.parent = content
+		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", "Content", onDragEnd, content)
 		columns[i%3].Add(card)
 	}
 
@@ -152,14 +252,33 @@ func main() {
 func showNewCardModal(window fyne.Window, columns []*fyne.Container) {
 	titleEntry := widget.NewEntry()
 	titleEntry.SetPlaceHolder("Enter card title")
+	titleEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("title cannot be empty")
+		}
+		return nil
+	}
 
 	contentEntry := widget.NewMultiLineEntry()
 	contentEntry.SetPlaceHolder("Enter card content")
+	contentEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("content cannot be empty")
+		}
+		return nil
+	}
 
 	subtitleEntry := widget.NewEntry()
 	subtitleEntry.SetPlaceHolder("Enter card subtitle")
+	subtitleEntry.Validator = func(s string) error {
+		if len(s) == 0 {
+			return fmt.Errorf("subtitle cannot be empty")
+		}
+		return nil
+	}
 
 	statusEntry := widget.NewSelect([]string{NotStarted.String(), InProgress.String(), Done.String()}, nil)
+	statusEntry.SetSelected(NotStarted.String())
 
 	items := []*widget.FormItem{
 		{Text: "Title", Widget: titleEntry},
@@ -171,7 +290,7 @@ func showNewCardModal(window fyne.Window, columns []*fyne.Container) {
 		if !create {
 			return
 		}
-		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, widget.NewLabel(contentEntry.Text), onDragEnd)
+		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
 		column := columns[statusEntry.SelectedIndex()]
 		column.Add(newCard)
 		window.Canvas().Refresh(column)

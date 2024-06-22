@@ -31,7 +31,7 @@ type DraggableCard struct {
 	isDragging   bool
 	dragStartPos fyne.Position
 	dragEndPos   fyne.Position
-	onDragEnd    func(*DraggableCard)
+	onDragEnd    func(*DraggableCard, fyne.Position)
 	parent       fyne.CanvasObject
 	contentLabel *widget.Label
 	editButton   *widget.Button
@@ -52,7 +52,7 @@ func showDeleteCardModal(card *DraggableCard) {
 	deleteDialog.Show()
 }
 
-func NewDraggableCard(title, subtitle, content string, onDragEnd func(*DraggableCard), parent fyne.CanvasObject) *DraggableCard {
+func NewDraggableCard(title, subtitle, content string, onDragEnd func(*DraggableCard, fyne.Position), parent fyne.CanvasObject) *DraggableCard {
 	card := &DraggableCard{onDragEnd: onDragEnd, parent: parent}
 	card.ExtendBaseWidget(card)
 	card.SetTitle(title)
@@ -181,6 +181,7 @@ func showEditCardModal(card *DraggableCard) {
 func (d *DraggableCard) Dragged(ev *fyne.DragEvent) {
 	if d.isDragging {
 		d.Move(d.Position().Add(ev.Dragged))
+		d.dragEndPos = ev.AbsolutePosition
 	}
 }
 
@@ -188,7 +189,7 @@ func (d *DraggableCard) DragEnd() {
 	if d.isDragging {
 		d.isDragging = false
 		if d.onDragEnd != nil {
-			d.onDragEnd(d)
+			d.onDragEnd(d, d.dragEndPos)
 		}
 	}
 }
@@ -201,7 +202,8 @@ func (d *DraggableCard) MouseDown(ev *desktop.MouseEvent) {
 	}
 }
 
-func (d *DraggableCard) MouseUp(*desktop.MouseEvent) {
+func (d *DraggableCard) MouseUp(ev *desktop.MouseEvent) {
+	d.dragEndPos = ev.AbsolutePosition
 	d.DragEnd()
 }
 
@@ -230,12 +232,12 @@ var borderedColumns []*fyne.Container
 var content *fyne.Container
 
 // Global onDragEnd function
-func onDragEnd(card *DraggableCard) {
+func onDragEnd(card *DraggableCard, p fyne.Position) {
 	cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, 0))
 	log.Print(cardCenter)
 	for i, col := range borderedColumns {
 		colPos := col.Position()
-		xCardCenter := cardCenter.X
+		xCardCenter := p.X
 		if xCardCenter < 0 {
 			xCardCenter = 0
 		} else if xCardCenter > borderedColumns[2].Position().X+borderedColumns[2].Size().Width {

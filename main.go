@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"log"
 )
 
 type TaskStatus int
@@ -19,11 +20,6 @@ const (
 	NotStarted TaskStatus = iota + 1
 	InProgress
 	Done
-)
-
-var (
-	board   *KanbanBoard
-	content *fyne.Container
 )
 
 func (s TaskStatus) String() string {
@@ -36,88 +32,10 @@ type DraggableCard struct {
 	dragStartPos fyne.Position
 	dragEndPos   fyne.Position
 	onDragEnd    func(*DraggableCard)
-	parent       *Column
+	parent       fyne.CanvasObject
 	contentLabel *widget.Label
 	editButton   *widget.Button
 	deleteButton *widget.Button
-}
-
-type KanbanBoard struct {
-	Columns []*Column
-}
-
-type Column struct {
-	Title string
-	Cards []*DraggableCard
-}
-
-type KanbanLayout struct {
-	board *KanbanBoard
-}
-
-func (k *KanbanLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	columnWidth := size.Width / float32(len(k.board.Columns))
-	for i, col := range k.board.Columns {
-		if i >= len(objects) {
-			break // Don't process more columns than we have objects
-		}
-		colObj := objects[i].(*fyne.Container)
-		colObj.Resize(fyne.NewSize(columnWidth, size.Height))
-		colObj.Move(fyne.NewPos(float32(i)*columnWidth, 0))
-
-		cardY := float32(60) // Leave space for column title
-		for _, card := range col.Cards {
-			card.Resize(fyne.NewSize(columnWidth-20, 80))
-			card.Move(fyne.NewPos(10, cardY))
-			cardY += 90
-		}
-	}
-}
-
-func (k *KanbanLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	return fyne.NewSize(600, 400)
-}
-
-func findColumnIndex(columns []*Column, targetCol *Column) int {
-	for i, col := range columns {
-		if col == targetCol {
-			return i
-		}
-	}
-	return -1
-}
-
-func onDragEnd(card *DraggableCard) {
-	cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, 0))
-	for i := range board.Columns {
-		colObj := content.Objects[i].(*fyne.Container)
-		colPos := colObj.Position()
-		if cardCenter.X >= colPos.X && cardCenter.X < colPos.X+colObj.Size().Width {
-			// Remove card from its current column
-			if card.parent != nil {
-				for j, c := range card.parent.Cards {
-					if c == card {
-						card.parent.Cards = append(card.parent.Cards[:j], card.parent.Cards[j+1:]...)
-						break
-					}
-				}
-				// Remove from UI
-				oldColumnIndex := findColumnIndex(board.Columns, card.parent)
-				if oldColumnIndex != -1 {
-					colContent := content.Objects[oldColumnIndex].(*fyne.Container).Objects[0].(*fyne.Container)
-					colContent.Remove(card)
-				}
-			}
-			// Add card to the new column
-			board.Columns[i].Cards = append(board.Columns[i].Cards, card)
-			card.parent = board.Columns[i]
-			// Add to UI
-			colContent := colObj.Objects[0].(*fyne.Container)
-			colContent.Add(card)
-			break
-		}
-	}
-	content.Refresh()
 }
 
 func showDeleteCardModal(card *DraggableCard) {
@@ -126,20 +44,15 @@ func showDeleteCardModal(card *DraggableCard) {
 		if !confirmed {
 			return
 		}
-		if card.parent != nil {
-			for i, c := range card.parent.Cards {
-				if c == card {
-					card.parent.Cards = append(card.parent.Cards[:i], card.parent.Cards[i+1:]...)
-					break
-				}
-			}
+		for _, c := range columns {
+			c.Remove(card)
 		}
 		content.Refresh()
 	}, window)
 	deleteDialog.Show()
 }
 
-func NewDraggableCard(title, subtitle, content string, onDragEnd func(*DraggableCard), parent *Column) *DraggableCard {
+func NewDraggableCard(title, subtitle, content string, onDragEnd func(*DraggableCard), parent fyne.CanvasObject) *DraggableCard {
 	card := &DraggableCard{onDragEnd: onDragEnd, parent: parent}
 	card.ExtendBaseWidget(card)
 	card.SetTitle(title)
@@ -203,11 +116,21 @@ func showEditCardModal(card *DraggableCard) {
 	}
 
 	statusEntry := widget.NewSelect([]string{NotStarted.String(), InProgress.String(), Done.String()}, nil)
-	for i, col := range board.Columns {
-		if col == card.parent {
-			statusEntry.SetSelectedIndex(i)
+	foundCard := false
+	for i, col := range columns {
+		for _, obj := range col.Objects {
+			if obj == card {
+				statusEntry.SetSelectedIndex(i)
+				foundCard = true
+				break
+			}
+		}
+		if foundCard {
 			break
 		}
+	}
+	if !foundCard {
+		statusEntry.SetSelectedIndex(0)
 	}
 
 	items := []*widget.FormItem{
@@ -223,21 +146,31 @@ func showEditCardModal(card *DraggableCard) {
 		card.SetTitle(titleEntry.Text)
 		card.SetSubTitle(subtitleEntry.Text)
 		card.contentLabel.SetText(contentEntry.Text)
-
-		newColumnIndex := statusEntry.SelectedIndex()
-		if card.parent != board.Columns[newColumnIndex] {
-			for i, c := range card.parent.Cards {
-				if c == card {
-					card.parent.Cards = append(card.parent.Cards[:i], card.parent.Cards[i+1:]...)
+		cardColumnIndex := -1
+		for i, col := range columns {
+			for _, obj := range col.Objects {
+				if obj == card {
+					cardColumnIndex = i
 					break
 				}
 			}
-			board.Columns[newColumnIndex].Cards = append(board.Columns[newColumnIndex].Cards, card)
-			card.parent = board.Columns[newColumnIndex]
+			if cardColumnIndex != -1 {
+				break
+			}
 		}
 
 		card.Refresh()
-		content.Refresh()
+		if cardColumnIndex != statusEntry.SelectedIndex() {
+			for _, c := range columns {
+				c.Remove(card)
+			}
+
+			card.Refresh()
+			columns[statusEntry.SelectedIndex()].Add(card)
+		}
+
+		column := columns[statusEntry.SelectedIndex()]
+		window.Canvas().Refresh(column)
 	}
 
 	form := dialog.NewForm("New Card", "Create", "Cancel", items, submit, window)
@@ -247,10 +180,7 @@ func showEditCardModal(card *DraggableCard) {
 
 func (d *DraggableCard) Dragged(ev *fyne.DragEvent) {
 	if d.isDragging {
-		deltaX := ev.Position.X - d.dragStartPos.X
-		deltaY := ev.Position.Y - d.dragStartPos.Y
-		d.Move(fyne.NewPos(d.Position().X+deltaX, d.Position().Y+deltaY))
-		d.dragStartPos = ev.Position
+		d.Move(d.Position().Add(ev.Dragged))
 	}
 }
 
@@ -266,7 +196,9 @@ func (d *DraggableCard) DragEnd() {
 func (d *DraggableCard) MouseDown(ev *desktop.MouseEvent) {
 	d.isDragging = true
 	d.dragStartPos = ev.Position
-	content.Refresh() // Refresh the entire content container
+	if d.parent != nil {
+		d.parent.Refresh()
+	}
 }
 
 func (d *DraggableCard) MouseUp(*desktop.MouseEvent) {
@@ -292,38 +224,64 @@ func createColumnWithBorderAndHeader(content *fyne.Container, title string) *fyn
 	)
 }
 
+// Global variables
+var columns []*fyne.Container
+var borderedColumns []*fyne.Container
+var content *fyne.Container
+
+// Global onDragEnd function
+func onDragEnd(card *DraggableCard) {
+	cardCenter := card.Position().Add(fyne.NewPos(card.Size().Width/2, 0))
+	log.Print(cardCenter)
+	for i, col := range borderedColumns {
+		colPos := col.Position()
+		xCardCenter := cardCenter.X
+		if xCardCenter < 0 {
+			xCardCenter = 0
+		} else if xCardCenter > borderedColumns[2].Position().X+borderedColumns[2].Size().Width {
+			xCardCenter = borderedColumns[2].Position().X + borderedColumns[2].Size().Width - 1
+		}
+		if xCardCenter >= colPos.X && xCardCenter < colPos.X+col.Size().Width {
+			// Remove card from its current column
+			for _, c := range columns {
+				c.Remove(card)
+			}
+			// Add card to the new column
+			columns[i].Add(card)
+			card.Move(fyne.NewPos(0, 0)) // Reset position within new column
+			card.Refresh()
+			columns[i].Refresh()
+			break
+		}
+	}
+	content.Refresh()
+}
+
 func main() {
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Movable Sticky Notes")
 
-	board = &KanbanBoard{
-		Columns: []*Column{
-			{Title: NotStarted.String(), Cards: []*DraggableCard{}},
-			{Title: InProgress.String(), Cards: []*DraggableCard{}},
-			{Title: Done.String(), Cards: []*DraggableCard{}},
-		},
+	columnTitles := []string{NotStarted.String(), InProgress.String(), Done.String()}
+	columns = make([]*fyne.Container, 3)
+	borderedColumns = make([]*fyne.Container, 3)
+
+	content = container.New(layout.NewGridLayout(3))
+
+	for i := 0; i < 3; i++ {
+		columns[i] = container.NewVBox()
+		borderedColumns[i] = createColumnWithBorderAndHeader(columns[i], columnTitles[i])
+		borderedColumns[i].Resize(fyne.NewSize(200, 0)) // Set a fixed width for each column
+		content.Add(borderedColumns[i])
 	}
 
-	content = container.New(&KanbanLayout{board: board})
-
-	// Create column containers and add them to the content
-	for _, col := range board.Columns {
-		colContent := container.NewVBox()
-		borderedCol := createColumnWithBorderAndHeader(colContent, col.Title)
-		content.Add(borderedCol)
-	}
-
-	// Add sample cards
 	for i := 1; i <= 5; i++ {
-		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", "Content", onDragEnd, board.Columns[i%3])
-		board.Columns[i%3].Cards = append(board.Columns[i%3].Cards, card)
-		colContent := content.Objects[i%3].(*fyne.Container).Objects[0].(*fyne.Container)
-		colContent.Add(card)
+		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", "Content", onDragEnd, content)
+		columns[i%3].Add(card)
 	}
 
 	// Create the plus button
 	plusButton := widget.NewButton("+", func() {
-		showNewCardModal(myWindow)
+		showNewCardModal(myWindow, columns) // Add new cards to the first column by default
 	})
 
 	// Create a container with the content and the plus button
@@ -334,7 +292,7 @@ func main() {
 	myWindow.ShowAndRun()
 }
 
-func showNewCardModal(window fyne.Window) {
+func showNewCardModal(window fyne.Window, columns []*fyne.Container) {
 	titleEntry := widget.NewEntry()
 	titleEntry.SetPlaceHolder("Enter card title")
 	titleEntry.Validator = func(s string) error {
@@ -371,14 +329,14 @@ func showNewCardModal(window fyne.Window) {
 		{Text: "Content", Widget: contentEntry},
 		{Text: "Status", Widget: statusEntry},
 	}
-
 	submit := func(create bool) {
 		if !create {
 			return
 		}
-		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, board.Columns[statusEntry.SelectedIndex()])
-		board.Columns[statusEntry.SelectedIndex()].Cards = append(board.Columns[statusEntry.SelectedIndex()].Cards, newCard)
-		content.Refresh()
+		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
+		column := columns[statusEntry.SelectedIndex()]
+		column.Add(newCard)
+		window.Canvas().Refresh(column)
 	}
 
 	form := dialog.NewForm("New Card", "Create", "Cancel", items, submit, window)

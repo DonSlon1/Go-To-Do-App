@@ -138,13 +138,37 @@ func showEditCardModal(card *DraggableCard) {
 		{Text: "Content", Widget: contentEntry},
 		{Text: "Status", Widget: statusEntry},
 	}
-	submit := func(create bool) {
-		if !create {
+	submit := func(edit bool) {
+		if !edit {
 			return
 		}
-		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
+		card.SetTitle(titleEntry.Text)
+		card.SetSubTitle(subtitleEntry.Text)
+		card.contentLabel.SetText(contentEntry.Text)
+		cardColumnIndex := -1
+		for i, col := range columns {
+			for _, obj := range col.Objects {
+				if obj == card {
+					cardColumnIndex = i
+					break
+				}
+			}
+			if cardColumnIndex != -1 {
+				break
+			}
+		}
+
+		card.Refresh()
+		if cardColumnIndex != statusEntry.SelectedIndex() {
+			for _, c := range columns {
+				c.Remove(card)
+			}
+
+			card.Refresh()
+			columns[statusEntry.SelectedIndex()].Add(card)
+		}
+
 		column := columns[statusEntry.SelectedIndex()]
-		column.Add(newCard)
 		window.Canvas().Refresh(column)
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -12,9 +13,19 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"log"
+	"os"
 )
 
 type TaskStatus int
+
+var unsavedChanges bool
+
+type Todo struct {
+	Title    string     `json:"title"`
+	Subtitle string     `json:"subtitle"`
+	Content  string     `json:"content"`
+	Status   TaskStatus `json:"status"`
+}
 
 const (
 	NotStarted TaskStatus = iota + 1
@@ -36,6 +47,60 @@ type DraggableCard struct {
 	contentLabel *widget.Label
 	editButton   *widget.Button
 	deleteButton *widget.Button
+}
+
+func loadTodos() error {
+	data, err := os.ReadFile("saves/todos.json")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // File doesn't exist, which is fine for first run
+		}
+		return err
+	}
+
+	var todos []Todo
+	err = json.Unmarshal(data, &todos)
+	if err != nil {
+		return err
+	}
+
+	for _, todo := range todos {
+		card := NewDraggableCard(todo.Title, todo.Subtitle, todo.Content, onDragEnd, content)
+		columns[todo.Status-1].Add(card)
+	}
+
+	return nil
+}
+
+func saveTodos() error {
+	var todos []Todo
+
+	for i, column := range columns {
+		for _, obj := range column.Objects {
+			if card, ok := obj.(*DraggableCard); ok {
+				todo := Todo{
+					Title:    card.Title,
+					Subtitle: card.Subtitle,
+					Content:  card.contentLabel.Text,
+					Status:   TaskStatus(i + 1),
+				}
+				todos = append(todos, todo)
+			}
+		}
+	}
+
+	jsonData, err := json.MarshalIndent(todos, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile("saves/todos.json", jsonData, 0644)
+	if err != nil {
+		return err
+	}
+
+	unsavedChanges = false
+	return nil
 }
 
 func showDeleteCardModal(card *DraggableCard) {
@@ -63,10 +128,13 @@ func NewDraggableCard(title, subtitle, content string, onDragEnd func(*Draggable
 
 	card.editButton = widget.NewButtonWithIcon("Edit", resourceEditPenSvgrepoComSvg, func() {
 		showEditCardModal(card)
+		unsavedChanges = true
 	})
 	card.deleteButton = widget.NewButtonWithIcon("Delete", resourceTrashIconSvg, func() {
 		showDeleteCardModal(card)
+		unsavedChanges = true
 	})
+
 	card.editButton.Importance = widget.HighImportance
 	card.deleteButton.Importance = widget.DangerImportance
 
@@ -173,7 +241,7 @@ func showEditCardModal(card *DraggableCard) {
 		window.Canvas().Refresh(column)
 	}
 
-	form := dialog.NewForm("New Card", "Create", "Cancel", items, submit, window)
+	form := dialog.NewForm("Edit Card", "Edit", "Cancel", items, submit, window)
 	form.Resize(fyne.NewSize(400, 400))
 	form.Show()
 }
@@ -256,6 +324,7 @@ func onDragEnd(card *DraggableCard, p fyne.Position) {
 			break
 		}
 	}
+	unsavedChanges = true
 	content.Refresh()
 }
 
@@ -276,22 +345,59 @@ func main() {
 		content.Add(borderedColumns[i])
 	}
 
-	for i := 1; i <= 5; i++ {
-		card := NewDraggableCard(fmt.Sprintf("Sticky note %d", i), "This is a sticky note", "Content", onDragEnd, content)
-		columns[i%3].Add(card)
+	// Load todos at startup
+	err := loadTodos()
+	if err != nil {
+		log.Printf("Error loading todos: %v", err)
+		dialog.ShowError(err, myWindow)
 	}
 
 	// Create the plus button
 	plusButton := widget.NewButton("+", func() {
-		showNewCardModal(myWindow, columns) // Add new cards to the first column by default
+		showNewCardModal(myWindow, columns)
 	})
 
-	// Create a container with the content and the plus button
-	mainContainer := container.NewBorder(nil, container.NewCenter(plusButton), nil, nil, content)
+	// Create the save button
+	saveButton := widget.NewButton("Save", func() {
+		err := saveTodos()
+		if err != nil {
+			dialog.ShowError(err, myWindow)
+		} else {
+			dialog.ShowInformation("Success", "Todos saved successfully", myWindow)
+			unsavedChanges = false
+		}
+	})
+
+	// Create a container with the content, plus button, and save button
+	buttonContainer := container.NewHBox(plusButton, saveButton)
+	mainContainer := container.NewBorder(nil, container.NewCenter(buttonContainer), nil, nil, content)
 
 	myWindow.SetContent(mainContainer)
 	myWindow.Resize(fyne.NewSize(2000, 1200))
+	myWindow.SetCloseIntercept(func() {
+		if unsavedChanges {
+			showUnsavedChangesDialog(myWindow)
+		} else {
+			myWindow.Close()
+		}
+	})
+
 	myWindow.ShowAndRun()
+}
+
+func showUnsavedChangesDialog(window fyne.Window) {
+	dialog.ShowCustomConfirm("Unsaved Changes", "Save", "Don't Save", widget.NewLabel("You have unsaved changes. Do you want to save before closing?"),
+		func(save bool) {
+			if save {
+				err := saveTodos()
+				if err != nil {
+					dialog.ShowError(err, window)
+					return
+				}
+				dialog.ShowInformation("Success", "Todos saved successfully", window)
+			}
+			window.Close()
+		}, window)
 }
 
 func showNewCardModal(window fyne.Window, columns []*fyne.Container) {
@@ -338,6 +444,7 @@ func showNewCardModal(window fyne.Window, columns []*fyne.Container) {
 		newCard := NewDraggableCard(titleEntry.Text, subtitleEntry.Text, contentEntry.Text, onDragEnd, content)
 		column := columns[statusEntry.SelectedIndex()]
 		column.Add(newCard)
+		unsavedChanges = true
 		window.Canvas().Refresh(column)
 	}
 
